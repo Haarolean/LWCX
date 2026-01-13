@@ -323,6 +323,12 @@ public abstract class Database {
             return null;
         }
 
+        // Ensure the connection is valid before preparing statements.
+        // This handles MySQL connection timeout/closure scenarios.
+        if (!ensureConnected()) {
+            return null;
+        }
+
         try {
             if (useStatementCache) {
                 Statistics.addQuery();
@@ -333,6 +339,43 @@ public abstract class Database {
         } catch (Throwable ex) {
             throw new RuntimeException("Failed to prepare statement " + sql, ex);
         }
+    }
+
+    /**
+     * Ensure the database connection is valid and attempt to reconnect if necessary.
+     *
+     * @return true if the connection is valid or was successfully re-established, false otherwise
+     */
+    private boolean ensureConnected() {
+        try {
+            // Use a short timeout (0) for immediate check to avoid performance issues
+            if (connection.isClosed() || !connection.isValid(0)) {
+                log("Database connection lost. Attempting to reconnect...");
+                // Clear the statement cache as old statements are tied to the closed connection
+                statementCache.invalidateAll();
+                // Attempt to reconnect
+                if (!connect()) {
+                    log("Failed to reconnect to the database.");
+                    return false;
+                }
+                log("Successfully reconnected to the database.");
+            }
+        } catch (Exception e) {
+            log("Error checking database connection validity: " + e.getMessage());
+            // Clear cache and attempt reconnect on any connection check error
+            statementCache.invalidateAll();
+            try {
+                if (!connect()) {
+                    log("Failed to reconnect to the database after connection check error.");
+                    return false;
+                }
+                log("Successfully reconnected to the database after connection check error.");
+            } catch (Exception reconnectEx) {
+                log("Exception while attempting to reconnect: " + reconnectEx.getMessage());
+                return false;
+            }
+        }
+        return true;
     }
 
     private PreparedStatement prepareInternal(String sql, boolean returnGeneratedKeys) throws SQLException {
